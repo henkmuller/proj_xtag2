@@ -15,18 +15,22 @@
 
 #define CORE_USB 0
 
-#define XUD_EP_COUNT 4
+#define XUD_EP_OUT_COUNT 4
+#define XUD_EP_IN_COUNT 5
 
 /* Endpoint type tables */
-XUD_EpType epTypeTableOut[XUD_EP_COUNT] =   {XUD_EPTYPE_CTL, 
-                                            XUD_EPTYPE_BUL, 
-                                            XUD_EPTYPE_BUL, 
-                                            XUD_EPTYPE_DIS};
-
-XUD_EpType epTypeTableIn[XUD_EP_COUNT] = {   XUD_EPTYPE_CTL,
-                                             XUD_EPTYPE_DIS, 
+XUD_EpType epTypeTableOut[XUD_EP_OUT_COUNT] =   {XUD_EPTYPE_CTL, 
+                                             XUD_EPTYPE_BUL, 
+                                             XUD_EPTYPE_BUL, 
                                              XUD_EPTYPE_BUL,
-                                             XUD_EPTYPE_BUL};
+};
+
+XUD_EpType epTypeTableIn[XUD_EP_IN_COUNT] = {   XUD_EPTYPE_CTL,
+                                             XUD_EPTYPE_INT, 
+                                             XUD_EPTYPE_BUL,
+                                             XUD_EPTYPE_BUL,
+                                             XUD_EPTYPE_BUL,
+};
 
 /* USB Port declarations */
 #ifdef G1
@@ -155,18 +159,27 @@ void uart_thread(chanend from_usb, chanend xlink_data, chanend reset) {
 
 int from_host_buf_uart[USB_HOST_BUF_WORDS];
 
-void uart_usb_thread(chanend from_host, chanend to_host, chanend to_uart) {
+void uart_usb_thread(chanend from_host, chanend to_host, chanend to_uart, chanend from_vcom, chanend to_vcom) {
     char cmd = 0;
     int uart_byte_count;
     unsigned char buf_num;
     unsigned started_tx = 0;
     unsigned zero_buf[1]={0xffffffff};
+    int xscoping = 1;
 
     XUD_ep ep_from_host = XUD_Init_Ep(from_host);
     XUD_ep ep_to_host = XUD_Init_Ep(to_host);
+
+    XUD_ep ep_from_vcom = XUD_Init_Ep(from_vcom);
+    XUD_ep ep_to_vcom = XUD_Init_Ep(to_vcom);
     
     while (1) {
-        int datalength = XUD_GetBuffer(ep_from_host, (from_host_buf_uart, char[USB_HOST_BUF_WORDS*4])); 
+        int datalength;
+        if (xscoping) {
+            datalength = XUD_GetBuffer(ep_from_host, (from_host_buf_uart, char[USB_HOST_BUF_WORDS*4])); 
+        } else {
+            datalength = XUD_GetBuffer(ep_from_vcom, (from_host_buf_uart, char[USB_HOST_BUF_WORDS*4])); 
+        }  
         if (datalength > 0) {
             if (!started_tx) {
               outuint(to_uart, 1);
@@ -174,17 +187,26 @@ void uart_usb_thread(chanend from_host, chanend to_host, chanend to_uart) {
             }
             select {
               case inuchar_byref(to_uart, buf_num):
-                datalength = XUD_SetBuffer(ep_to_host, data_buffer_[buf_num], USB_HOST_BUF_WORDS*4);            // Send to host
+                  if (xscoping) {
+                      datalength = XUD_SetBuffer(ep_to_host, data_buffer_[buf_num], USB_HOST_BUF_WORDS*4);            // Send to host
+                  } else {
+                      datalength = XUD_SetBuffer(ep_to_vcom, data_buffer_[buf_num], USB_HOST_BUF_WORDS*4);            // Send to vcom
+                  }
                 outuint(to_uart, 1);
                 break;
               default:
-                datalength = XUD_SetBuffer(ep_to_host, (zero_buf, char[4]), 4);            // Send to host
+                  if (xscoping) {
+                      datalength = XUD_SetBuffer(ep_to_host, (zero_buf, char[4]), 4);            // Send to host
+                  } else {
+                      datalength = XUD_SetBuffer(ep_to_vcom, (zero_buf, char[4]), 4);            // Send to vcom
+                  }
                 break;
             }
         }
 
         if (datalength < 0) {
             XUD_ResetEndpoint(ep_from_host, ep_to_host);
+            XUD_ResetEndpoint(ep_from_vcom, ep_to_vcom);
         }
     }
 }
@@ -212,15 +234,16 @@ void jtag_thread(chanend from_host, chanend to_host, chanend reset) {
 
 int main()
 {
-    chan c_ep_out[4];
-    chan c_ep_in[4];
+    chan c_ep_out[XUD_EP_OUT_COUNT];
+    chan c_ep_in[XUD_EP_IN_COUNT];
     chan usb_to_uart;
     chan c;
     chan reset;
   
     par
     {
-        on stdcore[CORE_USB] : XUD_Manager( c_ep_out, 4, c_ep_in, 4,
+        on stdcore[CORE_USB] : XUD_Manager( c_ep_out, XUD_EP_OUT_COUNT,
+                                            c_ep_in, XUD_EP_IN_COUNT,
                                             null, epTypeTableOut, epTypeTableIn,
                                             p_usb_rst, clk, -1, XUD_SPEED_HS, null);  
         /* Endpoint 0 */
@@ -228,7 +251,7 @@ int main()
         on stdcore[CORE_USB] : jtag_thread(c_ep_out[1], c_ep_in[2], reset);
         restOfWorld(c);
         on stdcore[CORE_USB] : uart_thread(usb_to_uart, c, reset);
-        on stdcore[CORE_USB] : uart_usb_thread(c_ep_out[2], c_ep_in[3], usb_to_uart);
+        on stdcore[CORE_USB] : uart_usb_thread(c_ep_out[2], c_ep_in[3], usb_to_uart, c_ep_out[3], c_ep_in[4]);
     }
 
     return 0;
