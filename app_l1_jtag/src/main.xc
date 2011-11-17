@@ -32,12 +32,16 @@ XUD_EpType epTypeTableIn[XUD_EP_IN_COUNT] = {   XUD_EPTYPE_CTL,
                                              XUD_EPTYPE_BUL,
 };
 
+#if 0
 /* USB Port declarations */
 #ifdef G1
 on stdcore[CORE_USB] : out port p_usb_rst       = XS1_PORT_1I; // XDK PORT_1B, XTR: 1k, XVB: 1D, XTAG: 1I
 #else
 on stdcore[CORE_USB] : out port p_usb_rst       = XS1_PORT_1K; // XDK PORT_1B, XTR: 1k
 #endif
+#endif
+
+on stdcore[CORE_USB] : out port p_usb_rst       = XS1_PORT_32A;// XDK PORT_1B, XTR: 1k
 
 on stdcore[CORE_USB] : clock    clk             = XS1_CLKBLK_3;
 
@@ -211,6 +215,7 @@ void uart_usb_thread(chanend from_host, chanend to_host, chanend to_uart, chanen
     }
 }
 
+/*
 void jtag_thread(chanend from_host, chanend to_host, chanend reset) {
   XUD_ep ep_from_host = XUD_Init_Ep(from_host);
   XUD_ep ep_to_host = XUD_Init_Ep(to_host);
@@ -231,6 +236,7 @@ void jtag_thread(chanend from_host, chanend to_host, chanend reset) {
     }
   }
 }
+*/
 
 int main()
 {
@@ -248,8 +254,8 @@ int main()
                                             p_usb_rst, clk, -1, XUD_SPEED_HS, null);  
         /* Endpoint 0 */
         on stdcore[CORE_USB] : Endpoint0( c_ep_out[0], c_ep_in[0]);
-        on stdcore[CORE_USB] : jtag_thread(c_ep_out[1], c_ep_in[2], reset);
-        restOfWorld(c);
+//        on stdcore[CORE_USB] : jtag_thread(c_ep_out[1], c_ep_in[2], reset);
+        //restOfWorld(c);
         on stdcore[CORE_USB] : uart_thread(usb_to_uart, c, reset);
         on stdcore[CORE_USB] : uart_usb_thread(c_ep_out[2], c_ep_in[3], usb_to_uart, c_ep_out[3], c_ep_in[4]);
     }
