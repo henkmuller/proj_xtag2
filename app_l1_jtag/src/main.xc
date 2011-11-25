@@ -169,7 +169,7 @@ void uart_usb_thread(chanend from_host, chanend to_host, chanend to_uart, chanen
     unsigned char buf_num;
     unsigned started_tx = 0;
     unsigned zero_buf[1]={0xffffffff};
-    int xscoping = 1;
+    int xscoping = 0;
 
     XUD_ep ep_from_host = XUD_Init_Ep(from_host);
     XUD_ep ep_to_host = XUD_Init_Ep(to_host);
@@ -183,8 +183,14 @@ void uart_usb_thread(chanend from_host, chanend to_host, chanend to_uart, chanen
             datalength = XUD_GetBuffer(ep_from_host, (from_host_buf_uart, char[USB_HOST_BUF_WORDS*4])); 
         } else {
             datalength = XUD_GetBuffer(ep_from_vcom, (from_host_buf_uart, char[USB_HOST_BUF_WORDS*4])); 
+            if (datalength > 0) {
+                for(int i = 0; i < datalength; i++) {
+                    (from_host_buf_uart, char[USB_HOST_BUF_WORDS*4])[i]++;
+                }
+                datalength = XUD_SetBuffer(ep_to_vcom, (from_host_buf_uart, char[USB_HOST_BUF_WORDS*4]), datalength);
+            }
         }  
-        if (datalength > 0) {
+        if (0 || datalength > 0) {
             if (!started_tx) {
               outuint(to_uart, 1);
               started_tx = 1;

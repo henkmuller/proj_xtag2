@@ -356,8 +356,12 @@ void Endpoint0( chanend c_ep0_out, chanend c_ep0_in)
     XUD_ep ep0_out = XUD_Init_Ep(c_ep0_out);
     XUD_ep ep0_in  = XUD_Init_Ep(c_ep0_in);
 
-//    get_serial_number(strDescs[5][0], safestrlen(strDescs[5]));
-
+    get_serial_number(strDescs[5][0], safestrlen(strDescs[5])); 
+    strDescs[5][0]='X';
+    for(int i = 0; i < 8; i++) {
+        strDescs[5][i+1]=i+'0';
+    }
+    strDescs[5][8]=0;
     /* Copy langIDs string desc into string[0] */
     /* TODO: Macro? */
     safememcpy(strDescs[0], strDesc_langIDs, sizeof(strDesc_langIDs));
