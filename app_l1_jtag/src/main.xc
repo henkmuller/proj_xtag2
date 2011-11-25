@@ -12,6 +12,7 @@
 
 #include "xud.h"
 #include "usb.h"
+#include "xud_interrupt_driven.h"
 
 #define CORE_USB 0
 
@@ -54,8 +55,8 @@ void Endpoint0( chanend c_ep0_out, chanend c_ep0_in);
 
 #define USB_HOST_BUF_WORDS 128
 
-int from_host_buf[USB_HOST_BUF_WORDS];
-int to_host_buf[USB_HOST_BUF_WORDS];
+unsigned int from_host_buf[USB_HOST_BUF_WORDS];
+unsigned int to_host_buf[USB_HOST_BUF_WORDS];
 
 extern void dbg_cmd_manager_nochan(int input_size, int input[], int &output_size, int output[], chanend reset);
 
@@ -153,61 +154,103 @@ void uart_thread(chanend from_usb, chanend xlink_data, chanend reset) {
   }
 }
 
-int from_host_buf_uart[USB_HOST_BUF_WORDS];
+unsigned int from_host_buf_uart[USB_HOST_BUF_WORDS];
 
-void uart_usb_thread(chanend from_host, chanend to_host, chanend to_uart) {
-    char cmd = 0;
-    int uart_byte_count;
-    unsigned char buf_num;
-    unsigned started_tx = 0;
+void handleEndpoints(chanend chan_dbg_out, chanend chan_dbg_in,
+                     chanend chan_xscope_out, chanend chan_xscope_in,
+                      // chanend chan_ep0_out, chanend chan_ep0_in,
+                     chanend reset, chanend to_uart) {
+    XUD_ep c_dbg_in = XUD_Init_Ep(chan_dbg_in);
+    XUD_ep c_dbg_out = XUD_Init_Ep(chan_dbg_out);
+    XUD_ep c_xscope_in = XUD_Init_Ep(chan_xscope_in);
+    XUD_ep c_xscope_out = XUD_Init_Ep(chan_xscope_out);
+//    XUD_ep c_ep0_in = XUD_Init_Ep(chan_ep0_in);
+//    XUD_ep c_ep0_out = XUD_Init_Ep(chan_ep0_out);
+    unsigned char tmp;
+    chan serv;
     unsigned zero_buf[1]={0xffffffff};
+    int xscopeDataAvailable = 0;
+    int xscopeStarted = 0;
+    unsigned char xscopeBufferNumber;
 
-    XUD_ep ep_from_host = XUD_Init_Ep(from_host);
-    XUD_ep ep_to_host = XUD_Init_Ep(to_host);
-    
-    while (1) {
-        int datalength = XUD_GetBuffer(ep_from_host, (from_host_buf_uart, char[USB_HOST_BUF_WORDS*4])); 
-        if (datalength > 0) {
-            if (!started_tx) {
-              outuint(to_uart, 1);
-              started_tx = 1;
-            }
-            select {
-              case inuchar_byref(to_uart, buf_num):
-                datalength = XUD_SetBuffer(ep_to_host, data_buffer_[buf_num], USB_HOST_BUF_WORDS*4);            // Send to host
-                outuint(to_uart, 1);
-                break;
-              default:
-                datalength = XUD_SetBuffer(ep_to_host, (zero_buf, char[4]), 4);            // Send to host
-                break;
-            }
+    // First set handlers on each of the three XUD endpoints, then enable interrupts
+    // and store the server channel
+    XUD_interrupt_OUT(chan_dbg_out, c_dbg_out);
+    XUD_interrupt_IN(chan_dbg_in, c_dbg_in);
+    XUD_interrupt_OUT(chan_xscope_out, c_xscope_out);
+    XUD_interrupt_IN(chan_xscope_in, c_xscope_in);
+//    XUD_interrupt_OUT(chan_ep0_out, c_ep0_out);
+//    XUD_interrupt_IN(chan_ep0_in, c_ep0_in);
+
+    // And make a buffer available for OUT requests.
+    XUD_provide_OUT_buffer(c_dbg_out, from_host_buf);
+    XUD_provide_OUT_buffer(c_xscope_out, from_host_buf_uart);
+//    XUD_provide_OUT_buffer(c_ep0_out, setupBuffer);
+
+//    ep0Init(c_ep0_in);
+
+    XUD_interrupt_enable(serv);
+
+
+    while(1) {
+        select {
+        case inuchar_byref(serv, tmp):
+//            printintln(tmp);
+            if (tmp == (c_dbg_out & 0xff)) {
+                int datalength = XUD_compute_OUT_length(c_dbg_out, from_host_buf);
+                if (datalength >= 0) {
+                    dbg_cmd_manager_nochan(datalength, (from_host_buf,int[]), datalength, (to_host_buf,int[]), reset); 
+                    XUD_provide_IN_buffer(c_dbg_in, 0, to_host_buf, datalength);
+                    XUD_provide_OUT_buffer(c_dbg_out, from_host_buf);
+                }
+#if 0
+                else {
+// TODO: on RESET:
+                    XUD_ResetEndpoint(ep_from_host, ep_to_host);
+                    // Reset UART Thread mainloop
+                    outuchar(reset, 0xFF);
+                    outct(reset, 1);
+                    chkct(reset, 1);
+                }
+#endif 
+            } else if (tmp == (c_xscope_out & 0xff)) {
+                int datalength = XUD_compute_OUT_length(c_xscope_out, from_host_buf_uart);
+                if (datalength >= 0) { // TODO: Test not needed????
+                    if (!xscopeStarted) {
+                        outuint(to_uart, 1);
+                        xscopeStarted = 1;
+                    }
+                    if (xscopeDataAvailable) {
+                        XUD_provide_IN_buffer(c_xscope_in, 0,
+                                              (data_buffer_[(unsigned int)xscopeBufferNumber], unsigned[]),
+                                              USB_HOST_BUF_WORDS*4);
+                        xscopeDataAvailable = 0;
+                        outuint(to_uart, 1);
+                    } else {
+                        XUD_provide_IN_buffer(c_xscope_in, 0, zero_buf, 4);
+                    }
+                    XUD_provide_OUT_buffer(c_xscope_out, from_host_buf_uart);
+                }
+            } else if (tmp == (c_dbg_in & 0xff)) {
+                // Ok - done
+            } else if (tmp == (c_xscope_in & 0xff)) {
+                // Ok - done
+            }/* else if (tmp == (c_ep0_out & 0xff)) {
+                int l = XUD_compute_OUT_length(c_ep0_out, setupBuffer);
+                XUD_provide_OUT_buffer(c_ep0_out, setupBuffer);
+                if (l != -1) {
+                    ep0HandleOUTPacket(setupBuffer, l);
+                }
+            } else if (tmp == (c_ep0_in & 0xff)) {
+                ep0HandleINPacket();
+            }*/
+            break;
+        case inuchar_byref(to_uart, xscopeBufferNumber):
+            xscopeDataAvailable = 1;
+            break;
+            // Room for other cases here.
         }
-
-        if (datalength < 0) {
-            XUD_ResetEndpoint(ep_from_host, ep_to_host);
-        }
     }
-}
-
-void jtag_thread(chanend from_host, chanend to_host, chanend reset) {
-  XUD_ep ep_from_host = XUD_Init_Ep(from_host);
-  XUD_ep ep_to_host = XUD_Init_Ep(to_host);
-
-  while (1) {
-    int datalength = XUD_GetBuffer(ep_from_host, (from_host_buf, char[USB_HOST_BUF_WORDS*4]));
-    if (datalength >= 0) {
-      //printintln(datalength);
-      dbg_cmd_manager_nochan(datalength, from_host_buf, datalength, to_host_buf, reset); 
-      datalength = XUD_SetBuffer(ep_to_host, (to_host_buf, char[USB_HOST_BUF_WORDS*4]), datalength);
-    }
-    if (datalength < 0) {
-        XUD_ResetEndpoint(ep_from_host, ep_to_host);
-        // Reset UART Thread mainloop
-        outuchar(reset, 0xFF);
-        outct(reset, 1);
-        chkct(reset, 1);
-    }
-  }
 }
 
 int main()
@@ -225,10 +268,14 @@ int main()
                                             p_usb_rst, clk, -1, XUD_SPEED_HS, null);  
         /* Endpoint 0 */
         on stdcore[CORE_USB] : Endpoint0( c_ep_out[0], c_ep_in[0]);
-        on stdcore[CORE_USB] : jtag_thread(c_ep_out[1], c_ep_in[2], reset);
+//        on stdcore[CORE_USB] : jtag_thread(c_ep_out[1], c_ep_in[2], reset);
+        on stdcore[CORE_USB] : handleEndpoints(c_ep_out[1], c_ep_in[2],
+                                               c_ep_out[2], c_ep_in[3],
+                                               reset,
+                                               usb_to_uart);
         restOfWorld(c);
         on stdcore[CORE_USB] : uart_thread(usb_to_uart, c, reset);
-        on stdcore[CORE_USB] : uart_usb_thread(c_ep_out[2], c_ep_in[3], usb_to_uart);
+//        on stdcore[CORE_USB] : uart_usb_thread(c_ep_out[2], c_ep_in[3], usb_to_uart);
     }
 
     return 0;
