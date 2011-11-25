@@ -40,7 +40,7 @@
   0x20,                              /* 9  idVendor */ \
   0xd1,                              /* 10 idProduct */ \
   0xf7,                              /* 11 idProduct */ \
-  0x01,                              /* 12 bcdDevice : Device release number */ \
+  0x02,                              /* 12 bcdDevice : Device release number */ \
   0x10,                              /* 13 bcdDevice : Device release number */ \
   0x01,                              /* 14 iManufacturer : Index of manufacturer string */ \
   0x02,                              /* 15 iProduct : Index of product string descriptor */ \
@@ -369,7 +369,7 @@ void Endpoint0( chanend c_ep0_out, chanend c_ep0_in)
     /* Compute initial channel volume factors */ 
     //updateMasterVol(0xa);
     //updateMasterVol(0xb);
-    
+
     while(1)
     {
         /* Do standard enumeration requests */ 

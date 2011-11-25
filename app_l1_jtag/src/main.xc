@@ -33,16 +33,8 @@ XUD_EpType epTypeTableIn[XUD_EP_IN_COUNT] = {   XUD_EPTYPE_CTL,
                                              XUD_EPTYPE_BUL,
 };
 
-#if 0
 /* USB Port declarations */
-#ifdef G1
 on stdcore[CORE_USB] : out port p_usb_rst       = XS1_PORT_1I; // XDK PORT_1B, XTR: 1k, XVB: 1D, XTAG: 1I
-#else
-on stdcore[CORE_USB] : out port p_usb_rst       = XS1_PORT_1K; // XDK PORT_1B, XTR: 1k
-#endif
-#endif
-
-on stdcore[CORE_USB] : out port p_usb_rst       = XS1_PORT_32A;// XDK PORT_1B, XTR: 1k
 
 on stdcore[CORE_USB] : clock    clk             = XS1_CLKBLK_3;
 
@@ -163,15 +155,20 @@ void uart_thread(chanend from_usb, chanend xlink_data, chanend reset) {
 }
 
 unsigned int from_host_buf_uart[USB_HOST_BUF_WORDS];
+unsigned int from_host_buf_vcom[USB_HOST_BUF_WORDS];
+unsigned int from_host_buf_xscope[USB_HOST_BUF_WORDS];
 
 void handleEndpoints(chanend chan_dbg_out, chanend chan_dbg_in,
                      chanend chan_xscope_out, chanend chan_xscope_in,
+                     chanend chan_vcom_out, chanend chan_vcom_in,
                       // chanend chan_ep0_out, chanend chan_ep0_in,
                      chanend reset, chanend to_uart) {
     XUD_ep c_dbg_in = XUD_Init_Ep(chan_dbg_in);
     XUD_ep c_dbg_out = XUD_Init_Ep(chan_dbg_out);
     XUD_ep c_xscope_in = XUD_Init_Ep(chan_xscope_in);
     XUD_ep c_xscope_out = XUD_Init_Ep(chan_xscope_out);
+    XUD_ep c_vcom_in = XUD_Init_Ep(chan_vcom_in);
+    XUD_ep c_vcom_out = XUD_Init_Ep(chan_vcom_out);
 //    XUD_ep c_ep0_in = XUD_Init_Ep(chan_ep0_in);
 //    XUD_ep c_ep0_out = XUD_Init_Ep(chan_ep0_out);
     unsigned char tmp;
@@ -180,6 +177,8 @@ void handleEndpoints(chanend chan_dbg_out, chanend chan_dbg_in,
     int xscopeDataAvailable = 0;
     int xscopeStarted = 0;
     unsigned char xscopeBufferNumber;
+    int xscoping = 0;
+    int vcomWaiting = 1;
 
     // First set handlers on each of the three XUD endpoints, then enable interrupts
     // and store the server channel
@@ -187,12 +186,15 @@ void handleEndpoints(chanend chan_dbg_out, chanend chan_dbg_in,
     XUD_interrupt_IN(chan_dbg_in, c_dbg_in);
     XUD_interrupt_OUT(chan_xscope_out, c_xscope_out);
     XUD_interrupt_IN(chan_xscope_in, c_xscope_in);
+    XUD_interrupt_OUT(chan_vcom_out, c_vcom_out);
+    XUD_interrupt_IN(chan_vcom_in, c_vcom_in);
 //    XUD_interrupt_OUT(chan_ep0_out, c_ep0_out);
 //    XUD_interrupt_IN(chan_ep0_in, c_ep0_in);
 
     // And make a buffer available for OUT requests.
     XUD_provide_OUT_buffer(c_dbg_out, from_host_buf);
     XUD_provide_OUT_buffer(c_xscope_out, from_host_buf_uart);
+    XUD_provide_OUT_buffer(c_vcom_out, from_host_buf_vcom);
 //    XUD_provide_OUT_buffer(c_ep0_out, setupBuffer);
 
 //    ep0Init(c_ep0_in);
@@ -203,7 +205,6 @@ void handleEndpoints(chanend chan_dbg_out, chanend chan_dbg_in,
     while(1) {
         select {
         case inuchar_byref(serv, tmp):
-//            printintln(tmp);
             if (tmp == (c_dbg_out & 0xff)) {
                 int datalength = XUD_compute_OUT_length(c_dbg_out, from_host_buf);
                 if (datalength >= 0) {
@@ -211,6 +212,7 @@ void handleEndpoints(chanend chan_dbg_out, chanend chan_dbg_in,
                     XUD_provide_IN_buffer(c_dbg_in, 0, to_host_buf, datalength);
                     XUD_provide_OUT_buffer(c_dbg_out, from_host_buf);
                 }
+                else printstr("RESET\n");
 #if 0
                 else {
 // TODO: on RESET:
@@ -228,7 +230,7 @@ void handleEndpoints(chanend chan_dbg_out, chanend chan_dbg_in,
                         outuint(to_uart, 1);
                         xscopeStarted = 1;
                     }
-                    if (xscopeDataAvailable) {
+                    if (xscopeDataAvailable && xscoping) {
                         XUD_provide_IN_buffer(c_xscope_in, 0,
                                               (data_buffer_[(unsigned int)xscopeBufferNumber], unsigned[]),
                                               USB_HOST_BUF_WORDS*4);
@@ -239,6 +241,24 @@ void handleEndpoints(chanend chan_dbg_out, chanend chan_dbg_in,
                     }
                     XUD_provide_OUT_buffer(c_xscope_out, from_host_buf_uart);
                 }
+                else printstr("RESET\n");
+            } else if (tmp == (c_vcom_out & 0xff)) {
+                int datalength = XUD_compute_OUT_length(c_vcom_out, from_host_buf_xscope);
+                if (datalength >= 0) { // TODO: Test not needed????
+                    XUD_provide_OUT_buffer(c_vcom_out, from_host_buf_vcom);
+                }
+                else printstr("RESET\n");
+            } else if (tmp == (c_vcom_in & 0xff)) {
+                if (xscopeDataAvailable) {
+                    XUD_provide_IN_buffer(c_vcom_in, 0,
+                                          (data_buffer_[(unsigned int)xscopeBufferNumber], unsigned[]),
+                                          USB_HOST_BUF_WORDS*4);
+                    xscopeDataAvailable = 0;
+                    outuint(to_uart, 1);
+                } else {
+                    vcomWaiting = 1;
+                }
+                // Ok - done
             } else if (tmp == (c_dbg_in & 0xff)) {
                 // Ok - done
             } else if (tmp == (c_xscope_in & 0xff)) {
@@ -254,13 +274,20 @@ void handleEndpoints(chanend chan_dbg_out, chanend chan_dbg_in,
             }*/
             break;
         case inuchar_byref(to_uart, xscopeBufferNumber):
-            xscopeDataAvailable = 1;
+            if (vcomWaiting) {
+                vcomWaiting = 0;
+                XUD_provide_IN_buffer(c_vcom_in, 0,
+                                      (data_buffer_[(unsigned int)xscopeBufferNumber], unsigned[]),
+                                      USB_HOST_BUF_WORDS*4);
+                outuint(to_uart, 1);
+            } else {
+                xscopeDataAvailable = 1;
+            }
             break;
             // Room for other cases here.
         }
     }
 }
-*/
 
 int main()
 {
@@ -281,6 +308,7 @@ int main()
 //        on stdcore[CORE_USB] : jtag_thread(c_ep_out[1], c_ep_in[2], reset);
         on stdcore[CORE_USB] : handleEndpoints(c_ep_out[1], c_ep_in[2],
                                                c_ep_out[2], c_ep_in[3],
+                                               c_ep_out[3], c_ep_in[4],
                                                reset,
                                                usb_to_uart);
         restOfWorld(c);

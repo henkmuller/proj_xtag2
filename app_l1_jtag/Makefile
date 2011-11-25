@@ -1,5 +1,4 @@
 TARGET = XTAG2
-#TARGET = L1_AUDIO
 
 APP_NAME = l1_jtag
 
