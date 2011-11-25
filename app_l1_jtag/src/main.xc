@@ -250,15 +250,14 @@ void handleEndpoints(chanend chan_dbg_out, chanend chan_dbg_in,
                 else printstr("RESET\n");
             } else if (tmp == (c_vcom_in & 0xff)) {
                 if (xscopeDataAvailable) {
-                    XUD_provide_IN_buffer(c_vcom_in, 0,
-                                          (data_buffer_[(unsigned int)xscopeBufferNumber], unsigned[]),
-                                          USB_HOST_BUF_WORDS*4);
+                    XUD_provide_IN_buffer_i(c_vcom_in, 0,
+                                            (data_buffer_[(unsigned int)xscopeBufferNumber], unsigned[]),
+                                            4, (data_buffer_[(unsigned int)xscopeBufferNumber], short[])[0] );
                     xscopeDataAvailable = 0;
                     outuint(to_uart, 1);
                 } else {
                     vcomWaiting = 1;
                 }
-                // Ok - done
             } else if (tmp == (c_dbg_in & 0xff)) {
                 // Ok - done
             } else if (tmp == (c_xscope_in & 0xff)) {
@@ -276,9 +275,9 @@ void handleEndpoints(chanend chan_dbg_out, chanend chan_dbg_in,
         case inuchar_byref(to_uart, xscopeBufferNumber):
             if (vcomWaiting) {
                 vcomWaiting = 0;
-                XUD_provide_IN_buffer(c_vcom_in, 0,
-                                      (data_buffer_[(unsigned int)xscopeBufferNumber], unsigned[]),
-                                      USB_HOST_BUF_WORDS*4);
+                XUD_provide_IN_buffer_i(c_vcom_in, 0,
+                                        (data_buffer_[(unsigned int)xscopeBufferNumber], unsigned[]),
+                                        4, (data_buffer_[(unsigned int)xscopeBufferNumber], short[])[0] );
                 outuint(to_uart, 1);
             } else {
                 xscopeDataAvailable = 1;
